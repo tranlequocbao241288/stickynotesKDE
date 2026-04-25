@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    main.xml — Cấu hình lưu trữ cho plasmoid
+
+    Giải thích cho người mới:
+    - File này khai báo các "key" (khóa) mà plasmoid dùng để lưu dữ liệu
+    - KDE Plasma tự động đọc file này và tạo ra các key tương ứng
+    - Trong QML, truy cập bằng: plasmoid.configuration.notesData
+    - Dữ liệu được lưu tự động vào file config của Plasma (~/.config/)
+    - Khi restart Plasma, dữ liệu vẫn còn nhờ cơ chế này
+
+    Hai key chính:
+    1. notesData: Chuỗi JSON chứa toàn bộ notes + todos
+    2. appSettings: Chuỗi JSON chứa cài đặt ứng dụng (theme, màu mặc định)
+-->
+<kcfg xmlns="http://www.kde.org/standards/kcfg/1.0"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0
+                          http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+    <kcfgfile name=""/>
+
+    <group name="General">
+        <!-- Lưu toàn bộ dữ liệu notes dưới dạng JSON string -->
+        <entry name="notesData" type="String">
+            <default></default>
+        </entry>
+
+        <!-- Lưu cài đặt ứng dụng dưới dạng JSON string -->
+        <entry name="appSettings" type="String">
+            <default>{"defaultColor":"#fff59d","theme":"auto"}</default>
+        </entry>
+    </group>
+</kcfg>

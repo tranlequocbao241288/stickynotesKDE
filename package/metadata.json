@@ -1,0 +1,20 @@
+{
+    "KPlugin": {
+        "Id": "com.tranbao.stickynotes",
+        "Name": "Sticky Notes",
+        "Description": "A sticky notes widget with todo management for KDE Plasma",
+        "Icon": "knotes",
+        "Authors": [
+            {
+                "Name": "tranbao",
+                "Email": "tranbao@example.com"
+            }
+        ],
+        "Category": "Utilities",
+        "Version": "1.0.0",
+        "License": "GPL-3.0",
+        "Website": ""
+    },
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "KPackageStructure": "Plasma/Applet"
+}
