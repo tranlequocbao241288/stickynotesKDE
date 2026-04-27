@@ -17,13 +17,19 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as QQC2
 import org.kde.kirigami as Kirigami
+import "../code/logic.js" as Logic
 
 Item {
     id: todoItem
 
     // ─── PROPERTIES ──────────────────────────────────────
-    required property var todoData      // Object todo: {id, content, createdAt, dueDate, completed, order}
-    required property int todoIndex     // Vị trí trong danh sách
+    // Qt 6 FIX: Khai báo đúng tên role của model để Qt auto-inject
+    required property var modelData     // Qt 6 auto-inject từ ListView model
+    required property int index         // Qt 6 auto-inject từ ListView model
+
+    // Alias: đặt tên dễ hiểu cho code bên trong component
+    property var todoData: modelData    // Object todo: {id, content, createdAt, dueDate, completed, order}
+    property int todoIndex: index       // Vị trí trong danh sách
 
     // ─── SIGNALS ─────────────────────────────────────────
     signal toggled(string todoId)                      // Toggle completed
@@ -83,10 +89,11 @@ Item {
             spacing: 0
 
             // Nội dung Todo (có thể sửa)
-            QQC2.TextField {
+            QQC2.TextArea {
                 id: contentField
                 Layout.fillWidth: true
                 text: todoData ? todoData.content : ""
+                wrapMode: Text.Wrap
                 
                 // Mờ và gạch ngang chữ nếu đã hoàn thành (FR-07)
                 font.strikeout: todoData && todoData.completed
@@ -94,19 +101,21 @@ Item {
 
                 // Trong suốt để trông như một cái Label bình thường
                 background: Rectangle {
-                    color: contentField.activeFocus ?Kirigami.Theme.backgroundColor : "transparent"
+                    color: contentField.activeFocus ? Kirigami.Theme.backgroundColor : "transparent"
                     border.color: contentField.activeFocus ? Kirigami.Theme.highlightColor : "transparent"
                 }
 
-                onEditingFinished: {
-                    var newContent = text.trim()
-                    // Revert nếu nhập trống
-                    if (newContent === "" && todoData) {
-                        text = todoData.content
-                        return;
-                    }
-                    if (todoData && newContent !== todoData.content) {
-                        todoItem.edited(todoData.id, "content", newContent)
+                onActiveFocusChanged: {
+                    if (!activeFocus && todoData) {
+                        var newContent = text.trim()
+                        // Revert nếu nhập trống
+                        if (newContent === "") {
+                            text = todoData.content
+                            return;
+                        }
+                        if (newContent !== todoData.content) {
+                            todoItem.edited(todoData.id, "content", newContent)
+                        }
                     }
                 }
             }
@@ -118,7 +127,7 @@ Item {
                 
                 // Thời gian tạo
                 QQC2.Label {
-                    font.pointSize: Kirigami.Theme.defaultFont.pointSize * 0.8
+                    font.pointSize: Math.max(1, Kirigami.Theme.defaultFont.pointSize * 0.8)
                     color: "#757575"
                     // Logic.formatRelativeTime(todoData.createdAt)
                     text: todoData ? ("Created: " + Logic.formatRelativeTime(todoData.createdAt)) : ""
@@ -138,7 +147,7 @@ Item {
                     QQC2.Label {
                         id: dueDateLabel
                         anchors.centerIn: parent
-                        font.pointSize: Kirigami.Theme.defaultFont.pointSize * 0.8
+                        font.pointSize: Math.max(1, Kirigami.Theme.defaultFont.pointSize * 0.8)
                         color: parent.status === "warning" ? "#c86000" : (parent.status === "overdue" ? "#c62828" : "#757575")
                         text: todoData ? Logic.formatDueDate(todoData.dueDate) : ""
                     }

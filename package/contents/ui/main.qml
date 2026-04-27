@@ -99,8 +99,9 @@ PlasmoidItem {
                 onClicked: {
                     var newNote = Logic.createNote()
                     
-                    // Tạo một khoảng lệch (offset) ngẫu nhiên để các thẻ mới không đè khít lên nhau 100%
-                    var offset = Math.floor(Math.random() * 100)
+                    // Thay vì random nhỏ lẻ, dời vị trí Note mới dựa trên số lượng notes hiện có (cascade)
+                    // để đảm bảo ghi chú mới không bao giờ đè hoàn toàn lên ghi chú cũ
+                    var offset = (root.notesModel.length * 40) % 400
                     newNote.position = { x: 100 + offset, y: 100 + offset }
                     
                     // Tạo mảng mới = mảng cũ + note mới (nguyên tắc immutable)
@@ -183,10 +184,36 @@ PlasmoidItem {
 
             // Flickable tạo một khoảng không gian (canvas) rộng để kéo các note
             Flickable {
+                id: noteCanvas
                 anchors.fill: parent
                 contentWidth: 3000   // Kích thước canvas ảo
                 contentHeight: 3000
-                
+                clip: true           // Ẩn nội dung tràn ra ngoài viewport
+
+                // ╔════════════════════════════════════════════════╗
+                // ║  FIX: Tắt drag-to-scroll của Flickable         ║
+                // ║  Lý do: Flickable bắt gesture kéo → cuộn       ║
+                // ║  toàn bộ canvas → tất cả notes di chuyển theo.  ║
+                // ║  Thay vào đó dùng ScrollBar + WheelHandler.     ║
+                // ╚════════════════════════════════════════════════╝
+                interactive: false
+
+                // ScrollBar cho phép cuộn bằng thanh cuộn
+                QQC2.ScrollBar.vertical: QQC2.ScrollBar { active: true }
+                QQC2.ScrollBar.horizontal: QQC2.ScrollBar { active: true }
+
+                // WheelHandler: cuộn canvas bằng con lăn chuột
+                WheelHandler {
+                    onWheel: function(event) {
+                        var newY = noteCanvas.contentY - event.angleDelta.y
+                        noteCanvas.contentY = Math.max(0, Math.min(
+                            noteCanvas.contentHeight - noteCanvas.height, newY))
+                        var newX = noteCanvas.contentX - event.angleDelta.x
+                        noteCanvas.contentX = Math.max(0, Math.min(
+                            noteCanvas.contentWidth - noteCanvas.width, newX))
+                    }
+                }
+
                 // Background để dễ nhận biết vùng có thể cuộn
                 Rectangle {
                     anchors.fill: parent
@@ -199,12 +226,32 @@ PlasmoidItem {
                     model: root.filteredNotes
                     
                     delegate: NoteCard {
-                        // Liên kết tọa độ với position trong dữ liệu
-                        x: modelData.position ? modelData.position.x : 100
-                        y: modelData.position ? modelData.position.y : 100
-                        
-                        noteData: modelData
-                        noteIndex: index
+                        id: noteDelegate
+                        // modelData và index sẽ được Qt 6 auto-inject
+                        // vì NoteCard khai báo "required property var modelData"
+
+                        // ╔═══════════════════════════════════════════════════════╗
+                        // ║  FIX: Không dùng binding x/y trực tiếp vào noteData  ║
+                        // ║  Lý do: mỗi lần model thay đổi (kể cả update note     ║
+                        // ║  khác) QML re-evaluate binding → note đang kéo bị    ║
+                        // ║  snap về vị trí cũ trong data.                        ║
+                        // ║  Giải pháp: đặt x/y một lần khi tạo, sau đó chỉ      ║
+                        // ║  cập nhật từ data khi note KHÔNG đang được kéo.       ║
+                        // ╚═══════════════════════════════════════════════════════╝
+
+                        // Set vị trí ban đầu từ data (chỉ 1 lần khi tạo)
+                        Component.onCompleted: {
+                            x = (noteData && noteData.position) ? noteData.position.x : 100
+                            y = (noteData && noteData.position) ? noteData.position.y : 100
+                        }
+
+                        // Đồng bộ vị trí từ data khi data thay đổi NHƯNG note không đang kéo
+                        onNoteDataChanged: {
+                            if (!dragging && noteData && noteData.position) {
+                                x = noteData.position.x
+                                y = noteData.position.y
+                            }
+                        }
 
                         onNoteUpdated: function(updatedNote) {
                             root.notesModel = Logic.updateNote(root.notesModel, updatedNote.id, updatedNote)

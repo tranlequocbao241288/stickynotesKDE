@@ -28,15 +28,21 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as QQC2
 import org.kde.kirigami as Kirigami
+import "../code/logic.js" as Logic
 
 // Item: component cơ bản nhất trong QML (container vô hình)
 Item {
     id: noteCard
 
     // ─── PROPERTIES (Thuộc tính) ─────────────────────────
-    // required: BẮT BUỘC phải truyền khi dùng component này
-    required property var noteData      // Object note: {id, title, color, items[], ...}
-    required property int noteIndex     // Vị trí trong mảng notes (0, 1, 2...)
+    // Qt 6 FIX: Khi delegate có "required property", QML TẮT việc tự động
+    // inject modelData/index. Phải khai báo ĐÚNG TÊN role của model.
+    required property var modelData     // Qt 6 auto-inject từ Repeater model
+    required property int index         // Qt 6 auto-inject từ Repeater model
+
+    // Alias: đặt tên dễ hiểu cho code bên trong component
+    property var noteData: modelData    // Object note: {id, title, color, items[], ...}
+    property int noteIndex: index       // Vị trí trong mảng notes (0, 1, 2...)
 
     // ─── SIGNALS (Sự kiện) ───────────────────────────────
     // Component cha sẽ lắng nghe các signal này
@@ -50,6 +56,33 @@ Item {
     // ─── KÍCH THƯỚC ──────────────────────────────────────
     width: noteData && noteData.size ? noteData.size.width : 280
     height: noteData && noteData.size ? noteData.size.height : 380
+
+    // ─── TRẠNG THÁI KÉO ─────────────────────────────────
+    // Property này cho phép main.qml biết note đang được kéo
+    // để KHÔNG sync position từ data (tránh snap về vị trí cũ)
+    property bool dragging: dragHandler.active
+
+    // DragHandler được đặt ở cấp cao nhất để bao phủ TOÀN BỘ thẻ Note
+    // Điều này ngăn người dùng vô tình cuộn (pan) Flickable nền khi cố gắng kéo thẻ Note
+    DragHandler {
+        id: dragHandler
+        target: noteCard
+        onActiveChanged: {
+            // Khi thả chuột ra -> Cập nhật vị trí lên model
+            if (!active && noteData) {
+                var changes = { position: { x: noteCard.x, y: noteCard.y } }
+                noteCard.noteUpdated(Object.assign({}, noteData, changes))
+            }
+        }
+    }
+
+    // Cập nhật lại model khi Note bị thay đổi kích thước
+    function updateSize() {
+        if (noteData) {
+            var changes = { size: { width: noteCard.width, height: noteCard.height } }
+            noteCard.noteUpdated(Object.assign({}, noteData, changes))
+        }
+    }
 
     // ─── NỘI DUNG CHÍNH ──────────────────────────────────
     Rectangle {
@@ -78,26 +111,18 @@ Item {
             // ─── HEADER ──────────────────────────────────────
             RowLayout {
                 Layout.fillWidth: true
-                
-                // DragHandler cho phép người dùng kéo Note bằng thanh Header
-                DragHandler {
-                    target: noteCard   // Đối tượng bị kéo là cả thẻ NoteCard
-                    onActiveChanged: {
-                        // Khi người dùng THẢ chuột (hết active) -> Lưu tọa độ mới
-                        if (!active && noteData) {
-                            var changes = { position: { x: noteCard.x, y: noteCard.y } }
-                            noteCard.noteUpdated(Object.assign({}, noteData, changes))
-                        }
-                    }
-                }
-                
+
                 // 1. Title (nhấn vào để sửa)
-                QQC2.TextField {
+                QQC2.TextArea {
                     id: titleInput
                     Layout.fillWidth: true
                     text: noteData ? noteData.title : ""
                     font.bold: true
-                    font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.2
+                    wrapMode: Text.Wrap
+                    
+                    // Font lớn hơn 1 chút so với mặc định cho tiêu đề
+                    font.pointSize: Math.max(1, Kirigami.Theme.defaultFont.pointSize * 1.2)
+                    
                     color: "#212121"
                     
                     // Xóa viền/nền mặc định của TextField để giống chữ bình thường,
@@ -108,15 +133,17 @@ Item {
                         opacity: titleInput.activeFocus ? 0.7 : 1
                     }
                     
-                    // Lưu title khi mất focus hoặc nhấn Enter
-                    onEditingFinished: {
-                        var newTitle = text.trim()
-                        if (newTitle === "") {
-                            newTitle = "New Note"
-                            text = newTitle
+                    // Lưu title khi mất focus
+                    onActiveFocusChanged: {
+                        if (!activeFocus && noteData) {
+                            var newTitle = text.trim()
+                            if (newTitle === "") {
+                                newTitle = "New Note"
+                                text = newTitle
+                            }
+                            var changes = { title: newTitle }
+                            noteCard.noteUpdated(Object.assign({}, noteData, changes))
                         }
-                        var changes = { title: newTitle }
-                        noteCard.noteUpdated(Object.assign({}, noteData, changes))
                     }
                 }
 
@@ -157,8 +184,8 @@ Item {
 
                 delegate: TodoItem {
                     width: ListView.view.width
-                    todoData: modelData
-                    todoIndex: index
+                    // modelData và index sẽ được Qt 6 auto-inject
+                    // vì TodoItem khai báo "required property var modelData"
 
                     onToggled: function(todoId) {
                         noteCard.todoToggled(noteData.id, todoId)
