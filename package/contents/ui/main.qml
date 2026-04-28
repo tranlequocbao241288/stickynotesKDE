@@ -28,6 +28,7 @@ import QtQuick.Layouts                   // Hệ thống layout: RowLayout, Colu
 import QtQuick.Controls as QQC2         // Controls chuẩn: Button, TextField, ScrollView...
 import org.kde.plasma.plasmoid          // API của KDE Plasma plasmoid
 import org.kde.kirigami as Kirigami     // Design system của KDE (màu sắc, icon, units)
+import Qt.labs.platform                 // StandardPaths để lấy đường dẫn home
 
 // Import file logic.js — chứa toàn bộ business logic
 // Cú pháp: import "đường_dẫn" as TênĐểGọi
@@ -56,6 +57,84 @@ PlasmoidItem {
     
     // filteredNotes sẽ tự động tính toán lại mỗi khi notesModel, searchQuery hoặc activeFilter thay đổi
     property var filteredNotes: Logic.getFilteredNotes(notesModel, searchQuery, activeFilter)
+
+    // ─── GOOGLE DRIVE SYNC HELPERS ──────────────────────
+    /**
+     * Ghi file lên Google Drive.
+     * 
+     * @param drivePath - Đường dẫn thư mục Google Drive
+     * @param fileName - Tên file
+     * @param content - Nội dung file (JSON string)
+     */
+    function syncToGoogleDrive(drivePath, fileName, content) {
+        try {
+            // Expand ~ thành đường dẫn home thực
+            var expandedPath = drivePath.replace("~", StandardPaths.writableLocation(StandardPaths.HomeLocation));
+            var fullPath = expandedPath + "/" + fileName;
+            
+            // Escape content cho shell command
+            var escapedContent = content.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\$/g, "\\$").replace(/`/g, "\\`");
+            
+            // Tạo thư mục nếu chưa có và ghi file
+            var script = "mkdir -p '" + expandedPath + "' && echo \"" + escapedContent + "\" > '" + fullPath + "'";
+            
+            // Sử dụng executable helper
+            executable.exec(script);
+            
+            console.log("main.qml: Synced to Google Drive:", fullPath);
+        } catch (e) {
+            console.error("main.qml: Failed to sync to Google Drive:", e.message);
+        }
+    }
+
+    /**
+     * Đọc file từ Google Drive.
+     * 
+     * @param drivePath - Đường dẫn thư mục Google Drive
+     * @param fileName - Tên file
+     * @returns Nội dung file hoặc chuỗi rỗng nếu lỗi
+     */
+    function loadFromGoogleDrive(drivePath, fileName) {
+        try {
+            // Expand ~ thành đường dẫn home thực
+            var expandedPath = drivePath.replace("~", StandardPaths.writableLocation(StandardPaths.HomeLocation));
+            var fullPath = expandedPath + "/" + fileName;
+            
+            // Đọc file
+            var result = executable.exec("cat '" + fullPath + "' 2>/dev/null || echo ''");
+            
+            if (result && result.trim() !== "") {
+                console.log("main.qml: Loaded from Google Drive:", fullPath);
+                return result;
+            }
+            
+            return "";
+        } catch (e) {
+            console.error("main.qml: Failed to load from Google Drive:", e.message);
+            return "";
+        }
+    }
+
+    /**
+     * Kiểm tra xem đường dẫn Google Drive có tồn tại không.
+     * 
+     * @param drivePath - Đường dẫn thư mục Google Drive
+     * @returns true nếu tồn tại, false nếu không
+     */
+    function checkDrivePathExists(drivePath) {
+        try {
+            var expandedPath = drivePath.replace("~", StandardPaths.writableLocation(StandardPaths.HomeLocation));
+            var result = executable.exec("test -d '" + expandedPath + "' && echo 'exists' || echo 'not_exists'");
+            return result && result.trim() === "exists";
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // ─── EXECUTABLE HELPER (để chạy shell commands) ─────
+    Executable {
+        id: executable
+    }
 
     // ─── GIAO DIỆN ───────────────────────────────────────
     // fullRepresentation: Giao diện đầy đủ khi click vào widget trên panel
@@ -108,6 +187,51 @@ PlasmoidItem {
                     root.notesModel = root.notesModel.concat(newNote)
                     // Hẹn giờ lưu dữ liệu
                     Logic.scheduleSave(root, root.notesModel)
+                }
+            }
+
+            // ── Nút đồng bộ Google Drive ──
+            QQC2.ToolButton {
+                icon.name: "cloud-upload"
+                text: "Sync to Drive"
+                display: QQC2.AbstractButton.IconOnly
+                visible: root.plasmoid.configuration.enableGoogleDriveSync
+                
+                QQC2.ToolTip.text: "Manually sync to Google Drive"
+                QQC2.ToolTip.visible: hovered
+                QQC2.ToolTip.delay: 500
+
+                onClicked: {
+                    Logic.manualSyncToDrive(root, root.notesModel)
+                    syncNotification.text = "Synced to Google Drive!"
+                    syncNotification.visible = true
+                    syncNotificationTimer.restart()
+                }
+            }
+
+            // ── Nút tải lại từ Google Drive ──
+            QQC2.ToolButton {
+                icon.name: "cloud-download"
+                text: "Load from Drive"
+                display: QQC2.AbstractButton.IconOnly
+                visible: root.plasmoid.configuration.enableGoogleDriveSync
+                
+                QQC2.ToolTip.text: "Reload notes from Google Drive"
+                QQC2.ToolTip.visible: hovered
+                QQC2.ToolTip.delay: 500
+
+                onClicked: {
+                    var driveNotes = Logic.manualLoadFromDrive(root)
+                    if (driveNotes !== null) {
+                        root.notesModel = driveNotes
+                        syncNotification.text = "Loaded from Google Drive!"
+                        syncNotification.visible = true
+                        syncNotificationTimer.restart()
+                    } else {
+                        syncNotification.text = "Failed to load from Drive"
+                        syncNotification.visible = true
+                        syncNotificationTimer.restart()
+                    }
                 }
             }
         }
@@ -254,42 +378,57 @@ PlasmoidItem {
                         }
 
                         onNoteUpdated: function(updatedNote) {
-                            root.notesModel = Logic.updateNote(root.notesModel, updatedNote.id, updatedNote)
-                            Logic.scheduleSave(root, root.notesModel)
+                            var rootRef = root
+                            rootRef.notesModel = Logic.updateNote(rootRef.notesModel, updatedNote.id, updatedNote)
+                            Logic.scheduleSave(rootRef, rootRef.notesModel)
                         }
 
                         onNoteDeleted: function(noteId) {
-                            root.notesModel = Logic.deleteNote(root.notesModel, noteId)
-                            Logic.scheduleSave(root, root.notesModel)
+                            var rootRef = root
+                            rootRef.notesModel = Logic.deleteNote(rootRef.notesModel, noteId)
+                            Logic.scheduleSave(rootRef, rootRef.notesModel)
                         }
 
                         onTodoAdded: function(noteId, content) {
-                            var newTodo = Logic.createTodo(noteId, root.notesModel)
+                            console.log("main.qml: onTodoAdded called - noteId:", noteId, "content:", content)
+                            
+                            // Lưu reference đến root trước
+                            var rootRef = root
+                            
+                            var newTodo = Logic.createTodo(noteId, rootRef.notesModel)
+                            console.log("main.qml: Created todo:", newTodo.id)
                             
                             // Gán nội dung thực sự thay vì chuỗi rỗng
                             if (content) {
                                 newTodo.content = content
                             }
                             
-                            root.notesModel = Logic.addTodoToNote(root.notesModel, noteId, newTodo)
-                            Logic.scheduleSave(root, root.notesModel)
+                            console.log("main.qml: Before addTodoToNote")
+                            var updatedModel = Logic.addTodoToNote(rootRef.notesModel, noteId, newTodo)
+                            console.log("main.qml: After addTodoToNote")
+                            
+                            rootRef.notesModel = updatedModel
+                            Logic.scheduleSave(rootRef, rootRef.notesModel)
                         }
                         
                         onTodoUpdated: function(noteId, todoId, changes) {
-                            root.notesModel = Logic.updateTodo(root.notesModel, noteId, todoId, changes)
-                            Logic.scheduleSave(root, root.notesModel)
+                            var rootRef = root
+                            rootRef.notesModel = Logic.updateTodo(rootRef.notesModel, noteId, todoId, changes)
+                            Logic.scheduleSave(rootRef, rootRef.notesModel)
                         }
 
                         onTodoDeleted: function(noteId, todoId) {
-                            root.notesModel = Logic.deleteTodo(root.notesModel, noteId, todoId)
-                            Logic.scheduleSave(root, root.notesModel)
+                            var rootRef = root
+                            rootRef.notesModel = Logic.deleteTodo(rootRef.notesModel, noteId, todoId)
+                            Logic.scheduleSave(rootRef, rootRef.notesModel)
                         }
 
                         onTodoToggled: function(noteId, todoId) {
-                            var currentTodo = root.notesModel.find(n => n.id === noteId).items.find(t => t.id === todoId);
+                            var rootRef = root
+                            var currentTodo = rootRef.notesModel.find(n => n.id === noteId).items.find(t => t.id === todoId);
                             if (currentTodo) {
-                                root.notesModel = Logic.updateTodo(root.notesModel, noteId, todoId, { completed: !currentTodo.completed })
-                                Logic.scheduleSave(root, root.notesModel)
+                                rootRef.notesModel = Logic.updateTodo(rootRef.notesModel, noteId, todoId, { completed: !currentTodo.completed })
+                                Logic.scheduleSave(rootRef, rootRef.notesModel)
                             }
                         }
                     }
@@ -305,6 +444,23 @@ PlasmoidItem {
                 icon.name: "knotes"
                 visible: root.filteredNotes.length === 0
             }
+        }
+    }
+
+    // ─── SYNC NOTIFICATION ────────────────────────────────
+    // Thông báo nhỏ hiện khi sync thành công
+    Kirigami.InlineMessage {
+        id: syncNotification
+        anchors.bottom: parent.bottom
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottomMargin: Kirigami.Units.largeSpacing
+        type: Kirigami.MessageType.Positive
+        visible: false
+        
+        Timer {
+            id: syncNotificationTimer
+            interval: 3000  // 3 giây
+            onTriggered: syncNotification.visible = false
         }
     }
 

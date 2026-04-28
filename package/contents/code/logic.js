@@ -351,14 +351,20 @@ function createTodo(noteId, notes) {
  * @returns {array} Mảng notes MỚI
  */
 function addTodoToNote(notes, noteId, newTodo) {
-    return notes.map(function(note) {
+    console.log("logic.js: addTodoToNote called - noteId:", noteId, "todo:", newTodo.content);
+    
+    var result = notes.map(function(note) {
         if (note.id === noteId) {
-            return Object.assign({}, note, {
+            var updatedNote = Object.assign({}, note, {
                 items: note.items.concat(newTodo)
             });
+            console.log("logic.js: Added todo to note, new items count:", updatedNote.items.length);
+            return updatedNote;
         }
         return note;
     });
+    
+    return result;
 }
 
 /**
@@ -783,36 +789,22 @@ function validateTodo(todo) {
 //
 // JSON.stringify() = object → string (để lưu)
 // JSON.parse()     = string → object (để đọc)
-
-/** Biến lưu timer cho debounce save */
-var _saveTimer = null;
+//
+// LƯU Ý: QML JS engine không có setTimeout/clearTimeout,
+// nên ta save trực tiếp thay vì debounce.
 
 /**
  * Lên lịch save dữ liệu (debounce).
  *
- * GIẢI THÍCH:
- * Hàm này KHÔNG save ngay lập tức.
- * Nó đợi 500ms — nếu trong 500ms có lần gọi mới → reset đồng hồ.
- * Chỉ save khi user ngừng thao tác >= 500ms.
- *
- * CÁCH DÙNG TRONG QML:
- * Mỗi khi dữ liệu thay đổi, gọi: Logic.scheduleSave(root)
- * root = PlasmoidItem (chứa plasmoid.configuration)
+ * LƯU Ý: QML JS engine không có setTimeout, nên ta save trực tiếp
+ * thay vì debounce. Performance impact nhỏ vì save chỉ là ghi string.
  *
  * @param {object} plasmoidItem - PlasmoidItem QML (để truy cập configuration)
  * @param {array} notes - Mảng notes cần lưu
  */
 function scheduleSave(plasmoidItem, notes) {
-    // Hủy timer cũ (nếu có)
-    if (_saveTimer !== null) {
-        clearTimeout(_saveTimer);
-    }
-
-    // Tạo timer mới: sau 500ms mới thật sự save
-    _saveTimer = setTimeout(function() {
-        _doSave(plasmoidItem, notes);
-        _saveTimer = null;
-    }, SAVE_DEBOUNCE_MS);
+    // Save trực tiếp (không debounce vì QML JS không có setTimeout)
+    _doSave(plasmoidItem, notes);
 }
 
 /**
@@ -834,8 +826,19 @@ function scheduleSave(plasmoidItem, notes) {
 function _doSave(plasmoidItem, notes) {
     try {
         var jsonString = JSON.stringify(notes);
-        plasmoidItem.Plasmoid.configuration.notesData = jsonString;
-        console.log("logic.js: Saved " + notes.length + " notes");
+        
+        // Debug: Log dữ liệu trước khi save
+        console.log("logic.js: Saving notes:", notes.length);
+        for (var i = 0; i < notes.length; i++) {
+            console.log("  Note", i, ":", notes[i].title, "- items:", notes[i].items ? notes[i].items.length : 0);
+        }
+        
+        plasmoidItem.plasmoid.configuration.notesData = jsonString;
+        console.log("logic.js: Saved " + notes.length + " notes to local config");
+        console.log("logic.js: JSON length:", jsonString.length, "chars");
+        
+        // Đồng bộ lên Google Drive nếu được bật
+        _scheduleDriveSync(plasmoidItem, notes);
     } catch (e) {
         console.error("logic.js: Failed to save notes:", e.message);
     }
@@ -849,7 +852,18 @@ function _doSave(plasmoidItem, notes) {
  */
 function loadFromConfig(plasmoidItem) {
     try {
-        var jsonString = plasmoidItem.Plasmoid.configuration.notesData;
+        // Thử load từ Google Drive trước (nếu được bật)
+        var driveNotes = _loadFromDrive(plasmoidItem);
+        if (driveNotes !== null) {
+            console.log("logic.js: Loaded " + driveNotes.length + " notes from Google Drive");
+            return driveNotes;
+        }
+
+        // Fallback: load từ local config
+        var jsonString = plasmoidItem.plasmoid.configuration.notesData;
+
+        // Debug: Log dữ liệu đang load
+        console.log("logic.js: Loading from local config, JSON length:", jsonString ? jsonString.length : 0);
 
         // Nếu chưa có dữ liệu → trả về mảng rỗng
         if (!jsonString || jsonString.trim() === "") {
@@ -865,12 +879,18 @@ function loadFromConfig(plasmoidItem) {
             return [];
         }
 
+        // Debug: Log số lượng notes và items
+        console.log("logic.js: Parsed", notes.length, "notes from JSON");
+        for (var i = 0; i < notes.length; i++) {
+            console.log("  Note", i, ":", notes[i].title, "- items:", notes[i].items ? notes[i].items.length : 0);
+        }
+
         // Validate từng note (migration + sửa lỗi dữ liệu cũ)
         notes = notes.map(function(note) {
             return validateNote(note);
         });
 
-        console.log("logic.js: Loaded " + notes.length + " notes from config");
+        console.log("logic.js: Loaded " + notes.length + " notes from local config");
         return notes;
 
     } catch (e) {
@@ -989,4 +1009,159 @@ function getFilteredNotes(notes, query, filterType) {
             items: filterTodos(note.items, filterType)
         });
     });
+}
+
+
+// ============================================================
+// PHẦN 9: GOOGLE DRIVE SYNC — Đồng bộ với Google Drive
+// ============================================================
+// Đồng bộ dữ liệu lên Google Drive để không mất khi restart máy.
+// Yêu cầu: Google Drive đã được mount vào hệ thống (qua rclone, google-drive-ocamlfuse, v.v.)
+
+/**
+ * Lên lịch đồng bộ lên Google Drive (debounce).
+ *
+ * LƯU Ý: QML JS engine không có setTimeout, nên ta sync trực tiếp.
+ *
+ * @param {object} plasmoidItem - PlasmoidItem QML
+ * @param {array} notes - Mảng notes cần sync
+ */
+function _scheduleDriveSync(plasmoidItem, notes) {
+    // Kiểm tra xem có bật Google Drive sync không
+    if (!plasmoidItem.plasmoid.configuration.enableGoogleDriveSync) {
+        return;
+    }
+
+    // Sync trực tiếp (không debounce vì QML JS không có setTimeout)
+    _doSyncToDrive(plasmoidItem, notes);
+}
+
+/**
+ * Thật sự đồng bộ dữ liệu lên Google Drive.
+ *
+ * GIẢI THÍCH:
+ * Sử dụng Qt.labs.platform.StandardPaths để lấy đường dẫn home.
+ * Sau đó dùng executable để gọi lệnh shell ghi file.
+ *
+ * @param {object} plasmoidItem - PlasmoidItem QML
+ * @param {array} notes - Mảng notes cần sync
+ */
+function _doSyncToDrive(plasmoidItem, notes) {
+    try {
+        var config = plasmoidItem.plasmoid.configuration;
+        var drivePath = config.googleDrivePath;
+        var fileName = config.googleDriveFileName;
+        
+        // Expand ~ thành đường dẫn home thực
+        if (drivePath.indexOf("~") === 0) {
+            // Trong QML, ta sẽ gọi hàm helper từ main.qml để expand path
+            // Ở đây chỉ chuẩn bị dữ liệu
+        }
+        
+        var jsonString = JSON.stringify(notes, null, 2);  // Pretty print với indent 2
+        
+        // Gọi hàm helper từ QML để ghi file
+        // (QML sẽ implement hàm này vì JS thuần không có file I/O)
+        if (plasmoidItem.syncToGoogleDrive) {
+            plasmoidItem.syncToGoogleDrive(drivePath, fileName, jsonString);
+            console.log("logic.js: Synced " + notes.length + " notes to Google Drive");
+        } else {
+            console.warn("logic.js: syncToGoogleDrive function not available in QML");
+        }
+    } catch (e) {
+        console.error("logic.js: Failed to sync to Google Drive:", e.message);
+    }
+}
+
+/**
+ * Tải dữ liệu từ Google Drive khi khởi động.
+ *
+ * @param {object} plasmoidItem - PlasmoidItem QML
+ * @returns {array|null} Mảng notes hoặc null nếu không load được
+ */
+function _loadFromDrive(plasmoidItem) {
+    try {
+        var config = plasmoidItem.plasmoid.configuration;
+        
+        // Kiểm tra xem có bật Google Drive sync không
+        if (!config.enableGoogleDriveSync) {
+            return null;
+        }
+
+        var drivePath = config.googleDrivePath;
+        var fileName = config.googleDriveFileName;
+        
+        // Gọi hàm helper từ QML để đọc file
+        if (plasmoidItem.loadFromGoogleDrive) {
+            var jsonString = plasmoidItem.loadFromGoogleDrive(drivePath, fileName);
+            
+            if (!jsonString || jsonString.trim() === "") {
+                return null;
+            }
+            
+            var notes = JSON.parse(jsonString);
+            
+            if (!Array.isArray(notes)) {
+                console.warn("logic.js: Google Drive data is not an array");
+                return null;
+            }
+            
+            // Validate từng note
+            notes = notes.map(function(note) {
+                return validateNote(note);
+            });
+            
+            return notes;
+        } else {
+            console.warn("logic.js: loadFromGoogleDrive function not available in QML");
+            return null;
+        }
+    } catch (e) {
+        console.error("logic.js: Failed to load from Google Drive:", e.message);
+        return null;
+    }
+}
+
+/**
+ * Kiểm tra xem Google Drive có sẵn sàng không.
+ *
+ * @param {object} plasmoidItem - PlasmoidItem QML
+ * @returns {boolean} true nếu Drive sẵn sàng, false nếu không
+ */
+function checkGoogleDriveAvailable(plasmoidItem) {
+    try {
+        var config = plasmoidItem.plasmoid.configuration;
+        var drivePath = config.googleDrivePath;
+        
+        if (plasmoidItem.checkDrivePathExists) {
+            return plasmoidItem.checkDrivePathExists(drivePath);
+        }
+        
+        return false;
+    } catch (e) {
+        console.error("logic.js: Failed to check Google Drive availability:", e.message);
+        return false;
+    }
+}
+
+/**
+ * Đồng bộ thủ công (gọi từ UI).
+ *
+ * @param {object} plasmoidItem - PlasmoidItem QML
+ * @param {array} notes - Mảng notes cần sync
+ */
+function manualSyncToDrive(plasmoidItem, notes) {
+    console.log("logic.js: Manual sync triggered");
+    _doSyncToDrive(plasmoidItem, notes);
+}
+
+/**
+ * Tải lại từ Google Drive (gọi từ UI).
+ *
+ * @param {object} plasmoidItem - PlasmoidItem QML
+ * @returns {array|null} Mảng notes hoặc null nếu không load được
+ */
+function manualLoadFromDrive(plasmoidItem) {
+    console.log("logic.js: Manual load from Drive triggered");
+    return _loadFromDrive(plasmoidItem);
 }

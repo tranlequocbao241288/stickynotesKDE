@@ -29,5 +29,20 @@
         <entry name="appSettings" type="String">
             <default>{"defaultColor":"#fff59d","theme":"auto"}</default>
         </entry>
+
+        <!-- Bật/tắt đồng bộ Google Drive -->
+        <entry name="enableGoogleDriveSync" type="Bool">
+            <default>false</default>
+        </entry>
+
+        <!-- Đường dẫn đến thư mục Google Drive (đã mount) -->
+        <entry name="googleDrivePath" type="String">
+            <default>~/GoogleDrive/StickyNotes</default>
+        </entry>
+
+        <!-- Tên file lưu trên Google Drive -->
+        <entry name="googleDriveFileName" type="String">
+            <default>sticky-notes-data.json</default>
+        </entry>
     </group>
 </kcfg>
